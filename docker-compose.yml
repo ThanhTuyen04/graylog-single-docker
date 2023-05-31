@@ -1,0 +1,91 @@
+version: '3.9'
+services:
+  # MongoDB: https://hub.docker.com/_/mongo/
+  mongo:
+    image: "mongo:5.0.13"
+    container_name: mongodb
+    hostname: "mongodb"
+    volumes:
+      - /zfsdata/mongodb/data:/data/db
+      - /zfsdata/mongodb/data_config:/data/configdb
+      #- /zfsdata/mongodb/mongod.conf:/etc/mongod.conf
+    #command: mongod --config /etc/mongod.conf
+    networks:
+      - graylog
+  
+  # Opensearch: https://opensearch.org/docs/latest/install-and-configure/install-opensearch/docker/
+  elasticsearch:
+    image: "opensearchproject/opensearch:2.5.0"
+    container_name: opensearch
+    hostname: "opensearch"
+    environment:
+      - "http.host=0.0.0.0"
+      - "transport.host=localhost"
+      - "node.name=graylog"
+      - "discovery.type=single-node"
+      - "network.host=0.0.0.0"
+      - "OPENSEARCH_JAVA_OPTS=-Xms8g -Xmx8g" # Set min and max JVM heap sizes to at least 50% of system RAM
+      - "bootstrap.memory_lock=true" # Disable JVM heap memory swapping
+      - "DISABLE_INSTALL_DEMO_CONFIG=true" # Prevents execution of bundled demo script which installs demo certificates and security configurations to OpenSearch
+      - "DISABLE_SECURITY_PLUGIN=true" # Disables Security plugin
+    ulimits:
+      memlock:
+        soft: -1  # Set memlock to unlimited (no soft or hard limit)
+        hard: -1
+      nofile:
+        soft: 65536 # Maximum number of open files for the opensearch user - set to at least 65536
+        hard: 65536
+    volumes:
+      # check permission user:group is 1000:1000 /zfsdata/opensearch/data
+      - /zfsdata/opensearch/data:/usr/share/opensearch/data
+    networks:
+      - graylog
+  
+  # Cerebro: https://github.com/lmenezes/cerebro
+  cerebro:
+    image: yannart/cerebro:latest
+    container_name: cerebro
+    hostname: cerebro
+    ports:
+      - 5001:9000
+    networks:
+      - graylog
+  
+  # Graylog: https://hub.docker.com/r/graylog/graylog/
+  graylog:
+    image: graylog/graylog:5.1
+    container_name: graylog
+    hostname: graylog
+    environment:
+      # CHANGE ME (must be at least 16 characters)!
+      - "GRAYLOG_PASSWORD_SECRET=hash"
+      # Password: echo -n "Enter Password: " && head -1 < /dev/stdin | tr -d '\n' | sha256sum | cut -d " " -f1
+      - "GRAYLOG_ROOT_PASSWORD_SHA2=<sha256sum>"
+      - "GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/"
+      - "GRAYLOG_ROOT_TIMEZONE=Asia/Ho_Chi_Minh"
+      - "TZ=Asia/Ho_Chi_Minh"
+    entrypoint: /usr/bin/tini -- wait-for-it elasticsearch:9200 --  /docker-entrypoint.sh
+    networks:
+      - graylog
+    restart: always
+    depends_on:
+      - mongo
+      - elasticsearch
+    volumes:
+    #check permission user:group 1100:1100 and create file /zfsdata/graylog/data/config/graylog.conf.
+      - /zfsdata/graylog/data:/usr/share/graylog/data/
+    ports:
+      # Graylog web interface and REST API
+      - 80:9000
+      # Syslog TCP
+      - 1514:1514
+      # Syslog UDP
+      - 1514:1514/udp
+      # GELF TCP
+      - 12201:12201
+      # GELF UDP
+      - 12201:12201/udp
+
+networks:
+  graylog:
+    driver: bridge
